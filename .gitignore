@@ -3,3 +3,7 @@
 .env 
 
 pyproject.toml
+
+.ruff_cache
+
+uv.lock
