@@ -7,3 +7,6 @@ pyproject.toml
 .ruff_cache
 
 uv.lock
+
+##Event Generator
+src/event_generator/
