@@ -1,5 +1,10 @@
 
+# .gitignore
+
+## Ignore Virtual Environment
 .venv
+
+## Ignore Environment Variables
 .env 
 
 pyproject.toml
@@ -11,6 +16,6 @@ uv.lock
 ##Event Generator
 src/event_generator/
 
+__pycache__/
 
-src/trustmesh/__pycache__/
 src/trustmesh/practice.py
