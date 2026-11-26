@@ -56,7 +56,7 @@ class Events:
             for event in events:
                 if event.strip():
                     dict_events = json.loads(event.strip())
-                    
+
                     try:              
                         batch_validator = TypeAdapter(SchemaValidator | list[SchemaValidator])
                         validateEvents = batch_validator.validate_python(dict_events)
@@ -98,10 +98,10 @@ class Events:
         return self.sqsEventData
         
 
-    async def validatedEvents(self):
-        return await self.sqs()
+    # async def validatedEvents(self):
+    #     return await self.sqs()
 
-if __name__ == "__main__":
-    events = Events()
-    print(asyncio.run(events.sqs()))
+# if __name__ == "__main__":
+#     events = Events()
+#     print(asyncio.run(events.sqs()))
    
