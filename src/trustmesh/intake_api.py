@@ -1,33 +1,28 @@
 
-# IntakeAPI
-
 ## Import the libraries and modules
 import os
 import json
 import time
 import asyncio
 import logging
+import hashlib
 from collections import deque, defaultdict
 from datetime import datetime, timezone, timedelta
-from pydantic import (BaseModel, Field, ConfigDict, 
-                      TypeAdapter, ValidationError, Json)
+from pydantic import (BaseModel, Field, ConfigDict, TypeAdapter, ValidationError, Json)
 
 
 ##TODO: Path Finding
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-EVENTS_FILE = os.path.join(BASE_DIR, "..", "event_generator",\
-                            "events.jsonl")
+EVENTS_FILE = os.path.join(BASE_DIR, "..", "event_generator", "events.jsonl")
 
 ##TODO: Configure Logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - \
-                    %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 ##TODO: CONSTANTS
 ENCODING = "utf-8"
-
 MAX_EVENTS = 50
-ONE_MINUTE = 60
+SECONDS = 60
 
 ##TODO: Validate Events through Schema
 class SchemaValidator(BaseModel):
@@ -40,68 +35,75 @@ class SchemaValidator(BaseModel):
     schema_version:str | None = None
     seller_id:str
 
+
+
 class Events:
     def __init__(self):
-        self.window = timedelta(seconds=ONE_MINUTE)
-        self.events_data = deque()
-        self.falseEventsData = deque()
-        self.seller_data = defaultdict(deque)
-        self.sqsEventData = defaultdict(deque)
-        self.sameEvents = deque()
+        self.eventsData = deque()
+        self.sameEvents = set()
 
-
-    async def _rate_limit(self) ->deque:
-        ##TODO: Received Events
+    def _receivedEvents(self) ->deque:
+        """Receive incomming e-commerce marketplace events and aslo validate them."""
+        raw_events = deque()
         with open(EVENTS_FILE, "r", encoding=ENCODING) as events:
             for event in events:
                 if event.strip():
                     dict_events = json.loads(event.strip())
-
-                    try:              
-                        batch_validator = TypeAdapter(SchemaValidator | list[SchemaValidator])
-                        validateEvents = batch_validator.validate_python(dict_events)
-  
-                        if dict_events.get("event_id") not in self.sameEvents:
-                            ##TODO: Check Same Events
-                            self.sameEvents.append(dict_events.get("event_id"))
-
-                            seller_id = dict_events.get("seller_id")
-                            event_timestamp = datetime.fromisoformat\
-                                (dict_events.get("timestamp"))
-
-                            timestamps = self.seller_data[seller_id]
-
-                            while timestamps and (event_timestamp-timestamps[0])\
-                                >= self.window:
-                                timestamps.popleft()
-
-                            if len(timestamps) >= MAX_EVENTS:
-                                await asyncio.sleep(ONE_MINUTE)
-                                timestamps.clear()
-                            timestamps.append(event_timestamp)
-                            self.events_data.append(dict_events)
-                        else:
-                            logging.warning(f"DuplicateEventError: The event \
-                                            {dict_events.get("event_id")}\
-                                            has already existed.")
+                    try:
+                        batchValidator = TypeAdapter(SchemaValidator | list[SchemaValidator])
+                        validateEvents = batchValidator.validate_python(dict_events)
+                        raw_events.append(dict_events)
                     except ValidationError as e:
-                        logging.error(f"ValidationError:\n{e}")
-                        self.falseEventsData.append(dict_events)
-            return self.events_data
+                        logging.warning(f"ValidationError: {e}")
+        return raw_events
+
+    def _deDuplication(self):
+        """Verify duplicate evets and reject them."""
+        raw_events = deque()
+        for event in self._receivedEvents():
+            event_hash = hashlib.sha256(json.dumps(event).encode(ENCODING)).hexdigest()
+            if event_hash not in self.sameEvents:
+                self.sameEvents.add(event_hash)
+                raw_events.append(event)
+            else:
+                logging.warning(f"FoundDuplicateEvent: The event \
+                                {event.get('event_id')} has already existed.")
+        return raw_events
+
+    async def _rateLimits(self):
+        """Prevent application from too much incomming events from the seller side."""
+        raw_events = deque()
+        seller_data = defaultdict(deque)
+        window = timedelta(seconds=SECONDS)
+
+        for event in self._deDuplication():
+            seller_id = event.get("seller_id")
+            event_timestamps = datetime.fromisoformat(event.get("timestamp"))
+            timestamps = seller_data[seller_id]
+
+            while timestamps and (event_timestamps-timestamps[0]) >= window:
+                timestamps.popleft()
+
+            if len(timestamps) >= MAX_EVENTS:
+                await asyncio.sleep(SECONDS)
+                timestamps.clear()
+            timestamps.append(event_timestamps)
+            raw_events.append(event)
+        return raw_events
 
     async def sqs(self):
-        rate_limited_events = await self._rate_limit()
-        for event in rate_limited_events:
+        """Arrange the event according to the busines units."""
+        raw_events = defaultdict(deque)
+        rateLimitedEvents = await self._rateLimits()
+        for event in rateLimitedEvents:
             business_unit = event["business_unit"]
-            sqs_events = self.sqsEventData[business_unit]
+            sqs_events = raw_events[business_unit]
             sqs_events.append(event)
-        return self.sqsEventData
-        
+        return raw_events
 
-    # async def validatedEvents(self):
-    #     return await self.sqs()
 
-# if __name__ == "__main__":
-#     events = Events()
-#     print(asyncio.run(events.sqs()))
-   
+
+
+if __name__ == "__main__":
+    events = Events()
+    print(asyncio.run(events.sqs()))
